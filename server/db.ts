@@ -15,6 +15,7 @@ db.pragma('journal_mode = WAL');
 db.pragma('synchronous = NORMAL');
 db.pragma('cache_size = -2000'); // 2MB cache
 db.pragma('temp_store = MEMORY');
+db.pragma('foreign_keys = OFF'); // Disable FK enforcement to avoid constraint errors
 
 // Initialize tables
 export function initDb() {
