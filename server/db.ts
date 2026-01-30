@@ -11,6 +11,10 @@ if (!fs.existsSync(dataDir)) {
 }
 
 export const db = new Database(DB_PATH);
+db.pragma('journal_mode = WAL');
+db.pragma('synchronous = NORMAL');
+db.pragma('cache_size = -2000'); // 2MB cache
+db.pragma('temp_store = MEMORY');
 
 // Initialize tables
 export function initDb() {

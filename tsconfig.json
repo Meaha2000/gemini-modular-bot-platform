@@ -33,6 +33,6 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src"],
+  "include": ["src", "server", "functions"],
   "references": [{ "path": "./tsconfig.node.json" }]
 } 

@@ -39,7 +39,5 @@ ENV NODE_ENV=production
 # Expose the application port
 EXPOSE 3001
 
-# Start the application using ts-node (or pre-compiled JS)
-# For production efficiency, let's install ts-node globally or use node with -r ts-node/register
-RUN npm install -g ts-node typescript
-CMD ["ts-node", "server/index.ts"]
+# Start the application
+CMD ["npm", "start"]

@@ -76,7 +76,7 @@ export async function chatWithGemini(
       rawResponse = JSON.stringify(result.response);
       
       // Handle Function Calls (Tools)
-      const calls = result.response.getFunctionCalls();
+      const calls = result.response.functionCalls();
       if (calls && calls.length > 0) {
         const functionResponses = [];
         for (const call of calls) {
