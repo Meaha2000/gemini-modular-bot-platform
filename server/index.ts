@@ -98,7 +98,10 @@ app.get('/api/keys', authMiddleware, (req: any, res) => {
 });
 
 app.post('/api/keys', authMiddleware, (req: any, res) => {
-  const { key } = req.body;
+  const key = req.body?.key;
+  if (!key) {
+    return res.status(400).json({ error: 'API key is required' });
+  }
   const id = uuidv4();
   db.prepare('INSERT INTO gemini_keys (id, key, user_id) VALUES (?, ?, ?)').run(id, key, req.user.id);
   res.json({ id, key });
@@ -162,9 +165,9 @@ app.delete('/api/tools/:id', authMiddleware, (req: any, res) => {
 // --- STATS ---
 app.get('/api/stats', authMiddleware, (req: any, res) => {
   const logs = db.prepare('SELECT count(*) as count FROM bot_logs WHERE user_id = ?').get(req.user.id) as any;
-  const keys = db.prepare('SELECT count(*) as count FROM gemini_keys WHERE user_id = ? AND status = "active"').get(req.user.id) as any;
+  const keys = db.prepare("SELECT count(*) as count FROM gemini_keys WHERE user_id = ? AND status = 'active'").get(req.user.id) as any;
   const memories = db.prepare('SELECT count(*) as count FROM memories WHERE user_id = ?').get(req.user.id) as any;
-  const errors = db.prepare('SELECT count(*) as count FROM bot_logs WHERE user_id = ? AND (response_payload LIKE "%error%" OR response_payload IS NULL)').get(req.user.id) as any;
+  const errors = db.prepare("SELECT count(*) as count FROM bot_logs WHERE user_id = ? AND (response_payload LIKE '%error%' OR response_payload IS NULL)").get(req.user.id) as any;
   
   res.json({
     totalRequests: logs.count,
