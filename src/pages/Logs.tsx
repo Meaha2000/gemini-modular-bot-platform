@@ -90,7 +90,12 @@ export default function Logs() {
                 </TableRow>
               )}
               {logs.map((log) => {
-                const req = JSON.parse(log.request_payload || '{}');
+                let req: any = {};
+                try {
+                  req = JSON.parse(log.request_payload || '{}');
+                } catch {
+                  req = { prompt: 'Invalid payload' };
+                }
                 const isExpanded = expandedLog === log.id;
                 
                 return (
@@ -133,11 +138,25 @@ export default function Logs() {
                                 {log.response_payload}
                               </div>
                             </div>
-                            {showRaw && (
+                            {showRaw && log.raw_response && (
                               <div>
                                 <p className="text-muted-foreground uppercase font-bold mb-1">Raw API JSON:</p>
-                                <pre className="bg-black/5 p-3 rounded border border-border overflow-x-auto">
-                                  {JSON.stringify(JSON.parse(log.raw_response || '{}'), null, 2)}
+                                <pre className="bg-black/5 p-3 rounded border border-border overflow-x-auto whitespace-pre-wrap">
+                                  {(() => {
+                                    try {
+                                      // Handle potential tool response separator
+                                      const parts = log.raw_response.split('---TOOL RESPONSE---');
+                                      return parts.map((part, i) => {
+                                        try {
+                                          return JSON.stringify(JSON.parse(part.trim()), null, 2);
+                                        } catch {
+                                          return part;
+                                        }
+                                      }).join('\n---TOOL RESPONSE---\n');
+                                    } catch {
+                                      return log.raw_response;
+                                    }
+                                  })()}
                                 </pre>
                               </div>
                             )}

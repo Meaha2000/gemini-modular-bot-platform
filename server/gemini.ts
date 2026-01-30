@@ -26,7 +26,7 @@ export async function chatWithGemini(
   media: any[] = []
 ) {
   // 1. Get API Keys (Round-robin logic via last_used_at)
-  const keys = db.prepare('SELECT * FROM gemini_keys WHERE user_id = ? AND status = "active" ORDER BY last_used_at ASC').all(userId) as any[];
+  const keys = db.prepare("SELECT * FROM gemini_keys WHERE user_id = ? AND status = 'active' ORDER BY last_used_at ASC").all(userId) as any[];
 
   if (keys.length === 0) {
     throw new Error('No active Gemini API keys found');
