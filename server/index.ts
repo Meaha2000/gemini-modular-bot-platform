@@ -6,6 +6,36 @@ import { initDb, db } from './db';
 import { authenticateUser, generateToken, verifyToken, createUser } from './auth';
 import { chatWithGemini } from './gemini';
 import { processMedia } from './media';
+import { 
+  getAdapter, 
+  handleIncomingMessage, 
+  sendMessageWithBehavior,
+  PlatformIntegration,
+  IncomingMessage,
+  getRandomUserAgent 
+} from './platforms';
+import {
+  saveFile,
+  getFileById,
+  listFilesByCategory,
+  listAllFiles,
+  deleteFile,
+  readFileContent,
+  getFileStats,
+} from './fileStorage';
+import {
+  getOrCreateUnifiedContext,
+  updateContextSummary,
+  addFileReference,
+  getRecentContexts,
+  savePlaygroundMessage,
+  getPlaygroundHistory,
+  getPlaygroundSessions,
+  deletePlaygroundSession,
+  clearPlaygroundHistory,
+  getUserSettings,
+  updateUserSettings,
+} from './unifiedContext';
 import dotenv from 'dotenv';
 import path from 'path';
 
@@ -17,6 +47,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 app.use(cors());
 app.use(express.json());
+app.use(express.raw({ type: 'application/json' })); // For webhook signature verification
 
 // Serve static files from the React app
 app.use(express.static(path.join(process.cwd(), 'dist')));
@@ -175,6 +206,303 @@ app.get('/api/stats', authMiddleware, (req: any, res) => {
     totalMemories: memories.count,
     errorsToday: errors.count
   });
+});
+
+// --- PLATFORM INTEGRATIONS ---
+app.get('/api/integrations', authMiddleware, (req: any, res) => {
+  const items = db.prepare('SELECT * FROM platform_integrations WHERE user_id = ? ORDER BY created_at DESC').all(req.user.id);
+  res.json(items);
+});
+
+app.get('/api/integrations/:platform', authMiddleware, (req: any, res) => {
+  const items = db.prepare('SELECT * FROM platform_integrations WHERE platform = ? AND user_id = ? ORDER BY created_at DESC').all(req.params.platform, req.user.id);
+  res.json(items);
+});
+
+app.post('/api/integrations', authMiddleware, (req: any, res) => {
+  const { platform, name, apiKey, apiSecret, webhookUrl, phoneNumber, botToken, pageId, accessToken, proxyUrl, typingDelayMin, typingDelayMax } = req.body;
+  const id = uuidv4();
+  const userAgent = getRandomUserAgent();
+  
+  db.prepare(`
+    INSERT INTO platform_integrations (id, platform, name, api_key, api_secret, webhook_url, phone_number, bot_token, page_id, access_token, proxy_url, user_agent, typing_delay_min, typing_delay_max, user_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, platform, name, apiKey || null, apiSecret || null, webhookUrl || null, phoneNumber || null, botToken || null, pageId || null, accessToken || null, proxyUrl || null, userAgent, typingDelayMin || 500, typingDelayMax || 2000, req.user.id);
+  
+  res.json({ id, platform, name, status: 'inactive' });
+});
+
+app.put('/api/integrations/:id', authMiddleware, (req: any, res) => {
+  const { name, apiKey, apiSecret, webhookUrl, phoneNumber, botToken, pageId, accessToken, proxyUrl, typingDelayMin, typingDelayMax, status } = req.body;
+  
+  db.prepare(`
+    UPDATE platform_integrations 
+    SET name = COALESCE(?, name), api_key = COALESCE(?, api_key), api_secret = COALESCE(?, api_secret), 
+        webhook_url = COALESCE(?, webhook_url), phone_number = COALESCE(?, phone_number), 
+        bot_token = COALESCE(?, bot_token), page_id = COALESCE(?, page_id), 
+        access_token = COALESCE(?, access_token), proxy_url = COALESCE(?, proxy_url),
+        typing_delay_min = COALESCE(?, typing_delay_min), typing_delay_max = COALESCE(?, typing_delay_max),
+        status = COALESCE(?, status), updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND user_id = ?
+  `).run(name, apiKey, apiSecret, webhookUrl, phoneNumber, botToken, pageId, accessToken, proxyUrl, typingDelayMin, typingDelayMax, status, req.params.id, req.user.id);
+  
+  res.json({ success: true });
+});
+
+app.post('/api/integrations/:id/toggle', authMiddleware, (req: any, res) => {
+  const integration = db.prepare('SELECT * FROM platform_integrations WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id) as any;
+  if (integration) {
+    const newStatus = integration.status === 'active' ? 'inactive' : 'active';
+    db.prepare('UPDATE platform_integrations SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newStatus, req.params.id);
+    res.json({ success: true, status: newStatus });
+  } else {
+    res.status(404).json({ error: 'Integration not found' });
+  }
+});
+
+app.delete('/api/integrations/:id', authMiddleware, (req: any, res) => {
+  db.prepare('DELETE FROM platform_integrations WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+  res.json({ success: true });
+});
+
+// --- WEBHOOK RECEIVERS ---
+app.post('/api/webhooks/telegram/:integrationId', async (req, res) => {
+  try {
+    const integration = db.prepare('SELECT * FROM platform_integrations WHERE id = ? AND platform = ?').get(req.params.integrationId, 'telegram') as any;
+    if (!integration || integration.status !== 'active') {
+      return res.status(404).json({ error: 'Integration not found or inactive' });
+    }
+
+    console.log('[WEBHOOK] Telegram payload:', JSON.stringify(req.body, null, 2));
+    
+    const adapter = getAdapter('telegram');
+    const message = adapter.parseWebhook(req.body);
+    
+    if (message) {
+      message.integrationId = integration.id;
+      // Process message asynchronously
+      processIncomingMessage(integration, message).catch(console.error);
+    }
+    
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('[WEBHOOK] Telegram error:', error);
+    res.status(500).json({ error: 'Webhook processing failed' });
+  }
+});
+
+app.post('/api/webhooks/whatsapp/:integrationId', async (req, res) => {
+  try {
+    const integration = db.prepare('SELECT * FROM platform_integrations WHERE id = ? AND platform = ?').get(req.params.integrationId, 'whatsapp') as any;
+    if (!integration || integration.status !== 'active') {
+      return res.status(404).json({ error: 'Integration not found or inactive' });
+    }
+
+    console.log('[WEBHOOK] WhatsApp payload:', JSON.stringify(req.body, null, 2));
+    
+    // Handle verification challenge
+    if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token']) {
+      return res.send(req.query['hub.challenge']);
+    }
+    
+    const adapter = getAdapter('whatsapp');
+    const message = adapter.parseWebhook(req.body);
+    
+    if (message) {
+      message.integrationId = integration.id;
+      processIncomingMessage(integration, message).catch(console.error);
+    }
+    
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('[WEBHOOK] WhatsApp error:', error);
+    res.status(500).json({ error: 'Webhook processing failed' });
+  }
+});
+
+app.get('/api/webhooks/whatsapp/:integrationId', async (req, res) => {
+  // WhatsApp webhook verification
+  if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token']) {
+    console.log('[WEBHOOK] WhatsApp verification request');
+    return res.send(req.query['hub.challenge']);
+  }
+  res.status(400).send('Invalid verification');
+});
+
+app.post('/api/webhooks/messenger/:integrationId', async (req, res) => {
+  try {
+    const integration = db.prepare('SELECT * FROM platform_integrations WHERE id = ? AND platform = ?').get(req.params.integrationId, 'messenger') as any;
+    if (!integration || integration.status !== 'active') {
+      return res.status(404).json({ error: 'Integration not found or inactive' });
+    }
+
+    console.log('[WEBHOOK] Messenger payload:', JSON.stringify(req.body, null, 2));
+    
+    const adapter = getAdapter('messenger');
+    const message = adapter.parseWebhook(req.body);
+    
+    if (message) {
+      message.integrationId = integration.id;
+      processIncomingMessage(integration, message).catch(console.error);
+    }
+    
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('[WEBHOOK] Messenger error:', error);
+    res.status(500).json({ error: 'Webhook processing failed' });
+  }
+});
+
+app.get('/api/webhooks/messenger/:integrationId', async (req, res) => {
+  // Messenger webhook verification
+  if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token']) {
+    console.log('[WEBHOOK] Messenger verification request');
+    return res.send(req.query['hub.challenge']);
+  }
+  res.status(400).send('Invalid verification');
+});
+
+// Helper function to process incoming messages
+async function processIncomingMessage(integration: any, message: IncomingMessage) {
+  try {
+    // Get unified context
+    const context = getOrCreateUnifiedContext(message.senderId, message.platform, message.chatId, integration.user_id);
+    
+    // Process with Gemini
+    const response = await chatWithGemini(integration.user_id, `${message.platform}-${message.chatId}`, message.content, []);
+    
+    // Send response with human-like behavior
+    const platformIntegration: PlatformIntegration = {
+      id: integration.id,
+      platform: integration.platform,
+      name: integration.name,
+      botToken: integration.bot_token,
+      accessToken: integration.access_token,
+      phoneNumber: integration.phone_number,
+      status: integration.status,
+      typingDelayMin: integration.typing_delay_min,
+      typingDelayMax: integration.typing_delay_max,
+      userAgent: integration.user_agent,
+      userId: integration.user_id,
+      createdAt: integration.created_at,
+      updatedAt: integration.updated_at,
+    };
+    
+    await sendMessageWithBehavior(platformIntegration, {
+      chatId: message.chatId,
+      content: response.response,
+      replyToMessageId: message.messageId,
+    });
+    
+    // Update context
+    updateContextSummary(message.senderId, message.platform, integration.user_id, response.response.substring(0, 200));
+    
+  } catch (error) {
+    console.error('Error processing message:', error);
+  }
+}
+
+// --- FILE STORAGE ---
+app.get('/api/files', authMiddleware, (req: any, res) => {
+  const category = req.query.category as string;
+  const files = category ? listFilesByCategory(category, req.user.id) : listAllFiles(req.user.id);
+  res.json(files);
+});
+
+app.get('/api/files/stats', authMiddleware, (req: any, res) => {
+  const stats = getFileStats(req.user.id);
+  res.json(stats);
+});
+
+app.get('/api/files/:id', authMiddleware, (req: any, res) => {
+  const file = getFileById(req.params.id, req.user.id);
+  if (!file) return res.status(404).json({ error: 'File not found' });
+  res.json(file);
+});
+
+app.get('/api/files/:id/download', authMiddleware, (req: any, res) => {
+  const file = getFileById(req.params.id, req.user.id);
+  if (!file) return res.status(404).json({ error: 'File not found' });
+  
+  const content = readFileContent(req.params.id, req.user.id);
+  if (!content) return res.status(404).json({ error: 'File content not found' });
+  
+  res.setHeader('Content-Type', file.mime_type);
+  res.setHeader('Content-Disposition', `attachment; filename="${file.original_name}"`);
+  res.send(content);
+});
+
+app.post('/api/files', authMiddleware, upload.single('file'), async (req: any, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file provided' });
+    
+    const result = await saveFile(
+      req.file.buffer,
+      req.file.originalname,
+      req.file.mimetype,
+      req.user.id,
+      {
+        platform: req.body.platform,
+        chatId: req.body.chatId,
+        messageId: req.body.messageId,
+      }
+    );
+    
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/files/:id', authMiddleware, (req: any, res) => {
+  const success = deleteFile(req.params.id, req.user.id);
+  if (!success) return res.status(404).json({ error: 'File not found' });
+  res.json({ success: true });
+});
+
+// --- PLAYGROUND HISTORY ---
+app.get('/api/playground/sessions', authMiddleware, (req: any, res) => {
+  const sessions = getPlaygroundSessions(req.user.id);
+  res.json(sessions);
+});
+
+app.get('/api/playground/history/:chatId', authMiddleware, (req: any, res) => {
+  const history = getPlaygroundHistory(req.params.chatId, req.user.id);
+  res.json(history);
+});
+
+app.post('/api/playground/message', authMiddleware, (req: any, res) => {
+  const { chatId, role, content, mediaIds } = req.body;
+  const message = savePlaygroundMessage(chatId, role, content, req.user.id, mediaIds);
+  res.json(message);
+});
+
+app.delete('/api/playground/session/:chatId', authMiddleware, (req: any, res) => {
+  deletePlaygroundSession(req.params.chatId, req.user.id);
+  res.json({ success: true });
+});
+
+app.delete('/api/playground/history', authMiddleware, (req: any, res) => {
+  clearPlaygroundHistory(req.user.id);
+  res.json({ success: true });
+});
+
+// --- USER SETTINGS ---
+app.get('/api/settings/user', authMiddleware, (req: any, res) => {
+  const settings = getUserSettings(req.user.id);
+  res.json(settings);
+});
+
+app.put('/api/settings/user', authMiddleware, (req: any, res) => {
+  const { darkMode, typingSimulation, antiDetection, defaultPersonalityId } = req.body;
+  updateUserSettings(req.user.id, { darkMode, typingSimulation, antiDetection, defaultPersonalityId });
+  res.json({ success: true });
+});
+
+// --- UNIFIED CONTEXT ---
+app.get('/api/context/recent', authMiddleware, (req: any, res) => {
+  const contexts = getRecentContexts(req.user.id);
+  res.json(contexts);
 });
 
 // --- HEALTH CHECK ---

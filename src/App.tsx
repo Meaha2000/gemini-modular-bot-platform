@@ -8,6 +8,8 @@ import Settings from './pages/Settings';
 import Logs from './pages/Logs';
 import Tools from './pages/Tools';
 import Login from './pages/Login';
+import IntegrationsPage from './pages/Integrations';
+import FilesPage from './pages/Files';
 import { Toaster } from './components/ui/sonner';
 import { Spinner } from './components/ui/spinner';
 
@@ -33,6 +35,8 @@ function AppContent() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/playground" element={<Playground />} />
+          <Route path="/integrations" element={<IntegrationsPage />} />
+          <Route path="/files" element={<FilesPage />} />
           <Route path="/personalities" element={<Personalities />} />
           <Route path="/tools" element={<Tools />} />
           <Route path="/settings" element={<Settings />} />

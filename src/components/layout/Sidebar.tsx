@@ -1,12 +1,28 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, UserCircle, Settings, History, Brain, LogOut } from 'lucide-react';
+import { 
+  LayoutDashboard, 
+  MessageSquare, 
+  UserCircle, 
+  Settings, 
+  History, 
+  Brain, 
+  LogOut,
+  Network,
+  FolderOpen,
+  Moon,
+  Sun
+} from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useAuth } from '@/hooks/useAuth';
+import { Switch } from '@/components/ui/switch';
+import { apiFetch } from '@/lib/api';
 
 const navItems = [
   { icon: LayoutDashboard, label: 'Dashboard', path: '/' },
   { icon: MessageSquare, label: 'Playground', path: '/playground' },
+  { icon: Network, label: 'Integrations', path: '/integrations' },
+  { icon: FolderOpen, label: 'Files', path: '/files' },
   { icon: UserCircle, label: 'Personalities', path: '/personalities' },
   { icon: Brain, label: 'Tools', path: '/tools' },
   { icon: History, label: 'Logs', path: '/logs' },
@@ -14,7 +30,54 @@ const navItems = [
 ];
 
 export function Sidebar() {
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
+  const [darkMode, setDarkMode] = useState(false);
+
+  useEffect(() => {
+    // Check system preference and stored preference
+    const isDark = document.documentElement.classList.contains('dark') || 
+      localStorage.getItem('darkMode') === 'true';
+    setDarkMode(isDark);
+    if (isDark) {
+      document.documentElement.classList.add('dark');
+    }
+    
+    // Load user settings
+    if (user) {
+      apiFetch('/api/settings/user').then(settings => {
+        if (settings.darkMode !== undefined) {
+          setDarkMode(settings.darkMode);
+          if (settings.darkMode) {
+            document.documentElement.classList.add('dark');
+          } else {
+            document.documentElement.classList.remove('dark');
+          }
+        }
+      }).catch(() => {});
+    }
+  }, [user]);
+
+  const toggleDarkMode = async () => {
+    const newMode = !darkMode;
+    setDarkMode(newMode);
+    localStorage.setItem('darkMode', String(newMode));
+    
+    if (newMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+
+    // Save to backend
+    try {
+      await apiFetch('/api/settings/user', {
+        method: 'PUT',
+        body: JSON.stringify({ darkMode: newMode }),
+      });
+    } catch (e) {
+      console.error('Failed to save dark mode setting:', e);
+    }
+  };
 
   return (
     <aside className="w-64 border-r border-border bg-card flex flex-col h-screen sticky top-0">
@@ -26,7 +89,7 @@ export function Sidebar() {
           <span className="font-mono font-bold text-lg tracking-tight">GEMINI BOT</span>
         </div>
       </div>
-      <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
+      <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
         {navItems.map((item) => (
           <NavLink
             key={item.path}
@@ -52,7 +115,20 @@ export function Sidebar() {
           Logout
         </button>
       </nav>
-      <div className="p-4 border-t border-border">
+      <div className="p-4 border-t border-border space-y-3">
+        {/* Dark Mode Toggle */}
+        <div className="flex items-center justify-between px-1">
+          <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground">
+            {darkMode ? <Moon className="w-3.5 h-3.5" /> : <Sun className="w-3.5 h-3.5" />}
+            <span>{darkMode ? 'Dark' : 'Light'} Mode</span>
+          </div>
+          <Switch
+            checked={darkMode}
+            onCheckedChange={toggleDarkMode}
+            className="scale-75"
+          />
+        </div>
+        {/* Status Indicator */}
         <div className="bg-secondary/50 rounded-lg p-3">
           <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider mb-1">Status</p>
           <div className="flex items-center gap-2">
